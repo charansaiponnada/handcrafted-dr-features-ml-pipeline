@@ -1,16 +1,17 @@
 import streamlit as st
 import cv2
 import numpy as np
-import joblib
 import pandas as pd
+import joblib
 import os
 from skimage.feature import graycomatrix, graycoprops, local_binary_pattern
+from io import StringIO
 
-st.set_page_config(page_title="DR Classification", layout="wide")
+st.set_page_config(page_title="Diabetic Retinopathy Classifier", layout="wide")
 
-# --------------------------------------------
+# ---------------------------------------------------------
 # LOAD MODELS
-# --------------------------------------------
+# ---------------------------------------------------------
 @st.cache_resource
 def load_models():
     scaler = joblib.load("models/scaler.pkl")
@@ -32,13 +33,12 @@ CLASS_NAMES = {
 }
 
 
-# --------------------------------------------
-# PREPROCESS FUNCTION
-# --------------------------------------------
-def preprocess_image_from_bytes(file_bytes, size=224):
-    file_bytes = np.frombuffer(file_bytes, np.uint8)
-    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-
+# ---------------------------------------------------------
+# PREPROCESS IMAGE
+# ---------------------------------------------------------
+def preprocess_image(file_bytes, size=224):
+    arr = np.frombuffer(file_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
@@ -59,20 +59,18 @@ def preprocess_image_from_bytes(file_bytes, size=224):
     return img
 
 
-# --------------------------------------------
-# FEATURE EXTRACTOR
-# --------------------------------------------
+# ---------------------------------------------------------
+# FEATURE EXTRACTION
+# ---------------------------------------------------------
 def extract_features(image):
     features = []
     gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
 
     glcm = graycomatrix(
         gray,
-        distances=[1, 2, 3],
+        distances=[1,2,3],
         angles=[0, np.pi/4, np.pi/2, 3*np.pi/4],
-        symmetric=True,
-        normed=True,
-        levels=256
+        levels=256, symmetric=True, normed=True
     )
 
     features += [
@@ -83,95 +81,153 @@ def extract_features(image):
     ]
 
     lbp = local_binary_pattern(gray, 8, 1, method="uniform")
-    hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0, 10), range=(0, 9))
+    hist, _ = np.histogram(lbp.ravel(), bins=np.arange(0,10), range=(0,9))
     hist = hist.astype("float") / (hist.sum() + 1e-7)
     features += hist.tolist()
 
     for ch in cv2.split(image):
-        h = cv2.calcHist([ch], [0], None, [32], [0, 256]).flatten()
+        h = cv2.calcHist([ch], [0], None, [32], [0,256]).flatten()
         features += h.tolist()
 
     return np.array(features).reshape(1, -1)
 
 
-# --------------------------------------------
-# PREDICT FUNCTION
-# --------------------------------------------
+# ---------------------------------------------------------
+# PREDICT MODELS + CONFIDENCE SCORES
+# ---------------------------------------------------------
 def predict(image):
     feats = extract_features(image)
-    feats_scaled = scaler.transform(feats)
-    feats_pca = pca.transform(feats_scaled)
+    scaled = scaler.transform(feats)
+    reduced = pca.transform(scaled)
 
-    predictions = {
-        "RandomForest": int(rf.predict(feats_pca)[0]),
-        "SVM": int(svm.predict(feats_pca)[0]),
-        "LogisticRegression": int(lr.predict(feats_pca)[0]),
-        "NaiveBayes": int(nb.predict(feats_pca)[0]),
+    models = {
+        "Random Forest": rf,
+        "SVM": svm,
+        "Logistic Regression": lr,
+        "Naive Bayes": nb
     }
 
-    final_pred = max(set(predictions.values()), key=list(predictions.values()).count)
-    return predictions, final_pred
+    results = {}
+    probas = {}
+
+    for name, model in models.items():
+        pred = int(model.predict(reduced)[0])
+        results[name] = pred
+
+        if hasattr(model, "predict_proba"):
+            proba = model.predict_proba(reduced)[0]
+        else:
+            proba = np.zeros(5)
+
+        probas[name] = proba
+
+    final_pred = max(
+        set(results.values()),
+        key=list(results.values()).count
+    )
+
+    return results, probas, final_pred
 
 
-# --------------------------------------------
+# ---------------------------------------------------------
 # STREAMLIT UI
-# --------------------------------------------
-st.title("👁️ Diabetic Retinopathy Classifier (Automatic Ground Truth Check)")
+# ---------------------------------------------------------
+st.title("👁️ Diabetic Retinopathy Classification")
+st.write("Upload a fundus image. The app predicts severity using PCA-reduced handcrafted features and ML models.")
 
-uploaded_file = st.file_uploader("Upload a Test Image", type=["png", "jpg", "jpeg"])
+uploaded_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
 
 if uploaded_file:
 
     file_bytes = uploaded_file.read()
-    processed = preprocess_image_from_bytes(file_bytes)
+    processed = preprocess_image(file_bytes)
 
     col1, col2 = st.columns(2)
-
     with col1:
         st.image(uploaded_file, caption="Original Image", use_column_width=True)
 
     with col2:
         st.image(processed, caption="Preprocessed Image", use_column_width=True)
 
-    preds, final_pred = predict(processed)
+    # MODEL PREDICTIONS
+    preds, probas, final_pred = predict(processed)
 
     st.subheader("Model Predictions")
-    st.table({
+    pred_table = pd.DataFrame({
         "Model": preds.keys(),
         "Predicted Class": preds.values(),
         "Severity": [CLASS_NAMES[v] for v in preds.values()]
     })
+    st.table(pred_table)
 
-    st.subheader("Ensemble Prediction")
-    st.success(f"Final Severity Prediction: {CLASS_NAMES[final_pred]}")
+    # Probability Table
+    st.subheader("Confidence Scores (Probabilities)")
+    prob_df = pd.DataFrame(probas).T
+    prob_df.columns = [CLASS_NAMES[i] for i in range(5)]
+    st.dataframe(prob_df.style.highlight_max(axis=1))
 
 
-    # ----------------------------------------------------------
-    # AUTO FETCH GROUND TRUTH FROM test.csv
-    # ----------------------------------------------------------
+    st.subheader("Final Ensemble Prediction")
+    st.success(f"Ensemble Severity: {CLASS_NAMES[final_pred]}")
+
+
+    # ---------------------------------------------------------
+    # AUTOMATIC + MANUAL CORRECTNESS
+    # ---------------------------------------------------------
+    st.subheader("Correctness Check")
+
     TEST_CSV_PATH = r"C:\Users\cherr\Downloads\ml-dataset\test.csv"
+    actual_label = None
+    auto_matched = False
 
     if os.path.exists(TEST_CSV_PATH):
         test_df = pd.read_csv(TEST_CSV_PATH)
-
-        filename = uploaded_file.name   # e.g. "1ae8c165fd53.png"
-        file_id = os.path.splitext(filename)[0]  # remove .png
+        file_id = os.path.splitext(uploaded_file.name)[0]
 
         if file_id in test_df["id_code"].values:
             actual_label = int(test_df.loc[test_df["id_code"] == file_id, "diagnosis"].values[0])
+            auto_matched = True
+            st.info(f"Auto-Fetched Actual Severity: **{CLASS_NAMES[actual_label]}**")
 
-            st.subheader("Ground Truth from test.csv")
-            st.info(f"Actual Severity: **{CLASS_NAMES[actual_label]}**")
+    if not auto_matched:
+        actual_label = st.selectbox(
+            "Actual Severity (Manual Input):",
+            options=[0,1,2,3,4],
+            format_func=lambda x: CLASS_NAMES[x]
+        )
 
-            if final_pred == actual_label:
-                st.success(f"✔ Correct Prediction! ({CLASS_NAMES[final_pred]})")
-            else:
-                st.error(
-                    f"✖ Incorrect Prediction\n"
-                    f"Predicted: {CLASS_NAMES[final_pred]}\n"
-                    f"Actual: {CLASS_NAMES[actual_label]}"
-                )
-        else:
-            st.warning("⚠ This image ID was not found in test.csv.")
+    # Correctness Evaluation
+    if final_pred == actual_label:
+        st.success(f"✔ Correct Prediction! ({CLASS_NAMES[final_pred]})")
     else:
-        st.warning("⚠ test.csv not found. Place test.csv in the dataset folder.")
+        st.error(
+            f"✖ Incorrect Prediction\n"
+            f"Predicted: {CLASS_NAMES[final_pred]}\n"
+            f"Actual: {CLASS_NAMES[actual_label]}"
+        )
+
+
+    # ---------------------------------------------------------
+    # DOWNLOAD PREDICTION REPORT
+    # ---------------------------------------------------------
+    st.subheader("Download Prediction Report")
+
+    report = pd.DataFrame({
+        "Model": preds.keys(),
+        "Predicted_Class": preds.values(),
+        "Severity": [CLASS_NAMES[v] for v in preds.values()]
+    })
+
+    report["Actual_Label"] = actual_label
+    report["Actual_Severity"] = CLASS_NAMES[actual_label]
+    report["Ensemble"] = CLASS_NAMES[final_pred]
+
+    csv_buffer = StringIO()
+    report.to_csv(csv_buffer, index=False)
+
+    st.download_button(
+        label="Download Report CSV",
+        data=csv_buffer.getvalue(),
+        file_name="prediction_report.csv",
+        mime="text/csv"
+    )
