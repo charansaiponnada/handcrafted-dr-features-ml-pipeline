@@ -5,6 +5,49 @@
 This repository provides a complete end-to-end pipeline for **Diabetic Retinopathy (DR) severity classification** using **handcrafted fundus image features**, **PCA-based dimensionality reduction**, and **ensemble classical machine learning models**.  
 A **Streamlit web application** is included for interactive testing and cloud deployment.
 
+
+## Dataset
+
+This project uses the **APTOS 2019 Blindness Detection** dataset, a publicly available retinal fundus image dataset released by the Asia Pacific Tele-Ophthalmology Society (APTOS) as part of a Kaggle competition.
+
+The dataset contains high-resolution fundus images labeled according to the severity of **Diabetic Retinopathy (DR)**. Each image is assigned one of five clinically defined severity levels.
+
+### Diabetic Retinopathy Severity Classes
+
+| Label | Class Name       |
+| ----- | ---------------- |
+| 0     | No DR            |
+| 1     | Mild DR          |
+| 2     | Moderate DR      |
+| 3     | Severe DR        |
+| 4     | Proliferative DR |
+
+### Dataset Structure Used in This Project
+
+* `train_1.csv` – Training labels
+* `valid.csv` – Validation labels
+* `test.csv` – Test image metadata
+* `train_images/` – Training fundus images
+* `val_images/` – Validation fundus images
+* `test_images/` – Test fundus images
+
+Each CSV file contains:
+
+* `id_code`: unique image identifier
+* `diagnosis`: DR severity label (0–4)
+
+### Dataset Link
+
+You can access the dataset from Kaggle using the link below:
+
+👉 **[https://www.kaggle.com/competitions/aptos2019-blindness-detection](https://www.kaggle.com/competitions/aptos2019-blindness-detection)**
+
+### Reason for Selection
+
+The APTOS 2019 dataset is widely used in Diabetic Retinopathy research. It provides real-world image variability and clinically meaningful labels, making it suitable for evaluating both classical machine learning and deep learning approaches.
+
+
+
 ---
 
 ## 🚀 Project Highlights
